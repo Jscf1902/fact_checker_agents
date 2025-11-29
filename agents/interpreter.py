@@ -1,90 +1,58 @@
 # agents/interpreter.py
 
 import logging
-from typing import Dict
+import re
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("interpreter_agent")
 
-
-# ===========================================================
-# INTENT DETECTION
-# ===========================================================
-def detect_intent(query: str) -> str:
-    q = query.lower()
-
-    if any(word in q for word in ["buscar", "información", "info", "datos", "detalles", "sobre"]):
-        return "search"
-
-    if any(word in q for word in ["verifica", "es cierto", "confirma", "chequea", "fact", "verdad"]):
-        return "fact_check"
-
-    if any(word in q for word in ["reporte", "resumen", "report"]):
-        return "report"
-
-    return "unknown"
-
-
-# ===========================================================
-# ENTITY EXTRACTION (muy simple, luego podemos mejorarlo)
-# ===========================================================
-def extract_entities(query: str) -> Dict:
-    q = query.lower()
-    entities = {
-        "title": None,
-        "person": None,
-        "claim": None,
-    }
-
-    # SERIES / TITLES conocidos (luego lo hacemos dinámico con búsqueda)
-    tv_shows = {
-        "breaking bad": 1396,
-        "better call saul": 60059,
-        "the office": 2316,
-        "game of thrones": 1399,
-    }
-
-    for title in tv_shows:
-        if title in q:
-            entities["title"] = title
-            entities["tv_id"] = tv_shows[title]
-
-    # PERSONAS básicas (podemos expandir luego)
-    people = [
-        "bryan cranston",
-        "aaron paul",
-        "vince gilligan",
-        "bob odenkirk",
-    ]
-
-    for p in people:
-        if p.lower() in q:
-            entities["person"] = p
-
-    # CLAIM (texto original útil para fact checking)
-    entities["claim"] = query
-
-    return entities
-
-
-# ===========================================================
-# MAIN INTERPRETER AGENT
-# ===========================================================
-def interpreter_agent(query: str) -> Dict:
+def interpreter_agent(query: str):
+    """
+    Interpretación basada en reglas para cuando falla el LLM
+    """
     logger.info(f"Interpretando consulta: {query}")
-
-    intent = detect_intent(query)
-    entities = extract_entities(query)
-
+    
+    query_lower = query.lower()
+    
+    # Mejor detección de títulos en consultas comunes
+    title_patterns = [
+        r"(?:sobre|acerca de|de|la pel[ií]cula|el libro|la serie)[\s']*([^\.\?\!,]+)",
+        r"(?:busca|buscar|encuentra|encontrar)[\s']*([^\.\?\!,]+)",
+        r"(?:analiza|analizar)[\s']*([^\.\?\!,]+)",
+        r"(?:informaci[óo]n sobre)[\s']*([^\.\?\!,]+)"
+    ]
+    
+    title = None
+    for pattern in title_patterns:
+        match = re.search(pattern, query_lower, re.IGNORECASE)
+        if match:
+            potential_title = match.group(1).strip()
+            # Filtrar palabras comunes que no son títulos
+            if len(potential_title) > 3 and not potential_title in ["información", "datos", "algo"]:
+                title = potential_title.title()
+                break
+    
+    # Intentar extraer el título después de patrones específicos
+    if not title:
+        # Patrón simple: última parte de la consulta como título
+        words = query.split()
+        if len(words) > 2:
+            title = " ".join(words[-2:])  # Últimas 2 palabras como título
+    
+    # Determinar intención
+    if any(word in query_lower for word in ["busca", "buscar", "encuentra", "información"]):
+        intent = "search"
+    elif any(word in query_lower for word in ["analiza", "analizar", "análisis"]):
+        intent = "analysis"  
+    elif any(word in query_lower for word in ["verifica", "verificar", "es cierto", "fact check"]):
+        intent = "fact_check"
+    else:
+        intent = "unknown"
+    
     return {
         "intent": intent,
-        "entities": entities
+        "entities": {
+            "title": title,
+            "person": None, 
+            "claim": query if intent == "fact_check" else None
+        }
     }
-
-
-# ===========================================================
-# TEST
-# ===========================================================
-if __name__ == "__main__":
-    print(interpreter_agent("Dame información de Breaking Bad"))
-    print(interpreter_agent("Verifica si Bryan Cranston ganó un Emmy"))

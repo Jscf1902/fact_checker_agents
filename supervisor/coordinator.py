@@ -1,6 +1,12 @@
 # supervisor/coordinator.py
 
 import logging
+import sys
+import os
+
+# Añadir el directorio raíz al path de Python
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from agents.interpreter import interpreter_agent
 from agents.fact_checker import fact_checker_agent
 from agents.web_search import web_search_agent
@@ -61,7 +67,7 @@ def run_query(query: str):
     rule_interp = interpreter_agent(query)
     logger.info(f"Interpretación rule_based: {rule_interp}")
 
-    # 2) Interpretación con LLM (Qwen)
+    # 2) Interpretación con LLM (Qwen) - ✅ SÍ USAMOS OLLAMA
     llm_interp = nlp_agent(query)
     logger.info(f"Interpretación LLM: {llm_interp}")
 
@@ -81,19 +87,19 @@ def run_query(query: str):
         title = interpretation["entities"].get("title")
         if not title:
             return "No pude determinar el título sobre el cual consultar."
-        evidence = web_search_agent(query)
+        evidence = web_search_agent(query)  # ✅ Solo query, no title
 
     # ---------------------------------------------------------
     # 5) Realizar fact-check
     # ---------------------------------------------------------
     if interpretation.get("needs_fact_check") or intent == "fact_check":
-        fact_result = fact_checker_agent(interpretation, evidence)
+        fact_result = fact_checker_agent(query, evidence)
 
     # ---------------------------------------------------------
     # 6) Generar un reporte estructurado
     # ---------------------------------------------------------
     report = reporter_agent(
-        interpretation=interpretation,
+        interpretation=interpretation,  # ✅ Sin parámetro 'query'
         evidence=evidence,
         fact_check=fact_result
     )
@@ -117,7 +123,8 @@ def run_query(query: str):
 
 🎭 **Géneros detectados:**  
 {", ".join(genres) if genres else "No disponibles"}
- **Resumen clave:**  
+
+📖 **Resumen clave:**  
 {summary}
 
 (Generé un reporte completo, pero aquí solo te muestro lo importante.)

@@ -533,6 +533,8 @@ if __name__ == "__main__":
         print(f"\n📋 Consulta: '{query}'")
         start_time = time.time()
         
+        
+        
         result = web_search_agent(query)
         
         end_time = time.time()
