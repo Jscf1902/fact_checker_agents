@@ -31,16 +31,19 @@ def nlp_agent(query: str):
         }}
         
         Reglas importantes:
-        - "search": cuando piden buscar información general
+        - "search": cuando piden buscar información general (incluye consultas sobre cast/reparto)
         - "analysis": cuando piden analizar profundamente  
         - "fact_check": cuando piden verificar una afirmación
-        - "needs_web": true si requiere búsqueda web
+        - "needs_web": true si requiere búsqueda web (casi siempre true)
         - "needs_fact_check": true solo para verificaciones
         - "target_title": SIEMPRE intenta extraer un título, incluso si es aproximado
         
+        Palabras clave para cast/reparto: "cast", "reparto", "actores", "elenco", "protagonistas"
+        
         Ejemplos:
-        - "hay una serie de un pájaro azul y un mapache" → "target_title": "pájaro azul mapache"
-        - "película de zombies del 2010" → "target_title": "zombies 2010"
+        - "cual es el cast de Avengers" → "intent": "search", "target_title": "Avengers"
+        - "reparto de The Matrix" → "intent": "search", "target_title": "The Matrix"
+        - "quienes actúan en Titanic" → "intent": "search", "target_title": "Titanic"
         - "busca información sobre The Matrix" → "target_title": "The Matrix"
         """
         

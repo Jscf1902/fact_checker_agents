@@ -33,7 +33,7 @@ def run_query(query: str):
     # 2. BÚSQUEDA WEB SI ES NECESARIO
     # ---------------------------------------------------------
     if interpretation.get("needs_web") or intent in ["search", "analysis", "fact_check"]:
-        # ✅ CORREGIDO: Usar solo target_title, no entities
+        # Usar solo target_title
         title = interpretation.get("target_title")
         
         if not title:
@@ -45,6 +45,8 @@ def run_query(query: str):
         
         if evidence and "error" not in evidence:
             logger.info(f"✅ Información encontrada: {evidence.get('title', 'N/A')} ({evidence.get('year', 'N/A')})")
+            if evidence.get("cast"):
+                logger.info(f"🎭 Cast encontrado: {len(evidence['cast'])} actores")
         else:
             logger.warning("❌ No se encontró información en la búsqueda web")
 
@@ -72,38 +74,86 @@ def run_query(query: str):
     logger.info(f"💾 Reporte guardado: {report.get('filename', 'N/A')}")
 
     # ---------------------------------------------------------
-    # 5. RESPUESTA FINAL
+    # 5. RESPUESTA FINAL - MEJORADA PARA MOSTRAR CAST
     # ---------------------------------------------------------
     logger.info(f"🎯 Preparando respuesta para intención: {intent}")
 
-    # ANALYSIS
-    if intent == "analysis":
-        genres = evidence.get("genres", []) if evidence else []
-        summary = report.get("summary", "")
-        
-        response = f"""
-📌 **Análisis sobre tu pregunta**
+    # DETECCIÓN ESPECÍFICA PARA CONSULTAS DE CAST
+    query_lower = query.lower()
+    is_cast_query = any(word in query_lower for word in ["cast", "reparto", "actores", "elenco", "protagonistas"])
 
-🎬 *{title}*
+    # ANALYSIS
+    if intent == "analysis" or is_cast_query:
+        genres = evidence.get("genres", []) if evidence else []
+        summary = evidence.get("summary", "No disponible") if evidence else "No disponible"
+        cast = evidence.get("cast", []) if evidence else []
+        year = evidence.get("year", "No disponible") if evidence else "No disponible"
+        
+        # CONSULTA ESPECÍFICA DE CAST - RESPUESTA MEJORADA
+        if is_cast_query and cast:
+            cast_text = "\n".join([f"• {actor}" for actor in cast])
+            response = f"""
+🎬 **{evidence.get('title', title)} ({year})**
+
+🎭 **Reparto Principal:**
+{cast_text}
+
+📖 **Sinopsis:**
+{summary}
+"""
+        else:
+            # ANÁLISIS GENERAL
+            cast_preview = "\n".join([f"• {actor}" for actor in cast[:3]]) if cast else "No disponible"
+            response = f"""
+📌 **Análisis sobre: {title}**
+
+🎬 *{evidence.get('title', title)} ({year})*
 
 🔎 **Propósito:** {interpretation.get("query_purpose")}  
-
 🎭 **Géneros:** {", ".join(genres) if genres else "No disponibles"}
 
 📖 **Resumen:** {summary}
+
+👥 **Reparto (primeros 3):**
+{cast_preview}
 """
-        logger.info("✅ Respuesta ANALYSIS generada")
+        logger.info("✅ Respuesta ANALYSIS/CAST generada")
         return response.strip()
 
     # SEARCH
     if intent == "search":
-        summary = report.get("summary", "")
+        summary = evidence.get("summary", "No hay información disponible") if evidence else "No hay información disponible"
         
-        response = f"""
-**Información sobre {title}:**
+        # MEJORAR RESPUESTA PARA INCLUIR MÁS INFORMACIÓN
+        cast = evidence.get("cast", []) if evidence else []
+        year = evidence.get("year", "No disponible") if evidence else "No disponible"
+        genres = evidence.get("genres", []) if evidence else []
+        
+        if cast:
+            # Si hay cast, mostrarlo en la respuesta
+            cast_text = "\n".join([f"• {actor}" for actor in cast[:6]])  # Primeros 6 actores
+            response = f"""
+**Información sobre {title} ({year})**
 
+**🎭 Géneros:** {", ".join(genres) if genres else "No disponibles"}
+
+**📖 Sinopsis:**
+{summary}
+
+**🎬 Reparto Principal:**
+{cast_text}
+"""
+        else:
+            # Respuesta normal si no hay cast
+            response = f"""
+**Información sobre {title} ({year})**
+
+**🎭 Géneros:** {", ".join(genres) if genres else "No disponibles"}
+
+**📖 Sinopsis:**
 {summary}
 """
+        
         logger.info("✅ Respuesta SEARCH generada")
         return response.strip()
 
