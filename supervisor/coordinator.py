@@ -7,171 +7,127 @@ import os
 # Añadir el directorio raíz al path de Python
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from agents.interpreter import interpreter_agent
 from agents.fact_checker import fact_checker_agent
 from agents.web_search import web_search_agent
 from agents.reporter import reporter_agent
 from agents.nlp_agent import nlp_agent
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(levelname)s:%(name)s:%(message)s')
 logger = logging.getLogger("coordinator")
 
-
-# ---------------------------------------------------------
-# FUSIÓN DE INTERPRETACIONES (reglas + LLM)
-# ---------------------------------------------------------
-def merge_interpretations(rule_res, llm_res):
-    """
-    Mezcla intelligente la interpretación basada en reglas y la del modelo Qwen.
-    """
-
-    merged = {}
-
-    # INTENT
-    if llm_res and llm_res.get("intent") not in [None, "unknown"]:
-        merged["intent"] = llm_res["intent"]
-    else:
-        merged["intent"] = rule_res.get("intent", "unknown")
-
-    # ENTIDADES
-    ents = rule_res.get("entities", {}).copy()
-    merged["entities"] = ents
-
-    # Insertar title del LLM si lo detecta
-    if llm_res and llm_res.get("target_title"):
-        merged["entities"]["title"] = llm_res["target_title"]
-
-    # Insertar tv_id si viene del rule-based
-    if "tv_id" in rule_res.get("entities", {}):
-        merged["entities"]["tv_id"] = rule_res["entities"]["tv_id"]
-
-    # Otros campos generados por Qwen
-    if llm_res:
-        merged.update({
-            "task": llm_res.get("task"),
-            "needs_web": llm_res.get("needs_web", False),
-            "needs_fact_check": llm_res.get("needs_fact_check", False),
-            "query_purpose": llm_res.get("query_purpose")
-        })
-
-    return merged
-
-
-# ---------------------------------------------------------
-# EJECUCIÓN PRINCIPAL
-# ---------------------------------------------------------
 def run_query(query: str):
-    logger.info(f"Coordinador: iniciando orquestación para query: {query}")
+    logger.info(f"🚀 Iniciando procesamiento para: '{query}'")
 
-    # 1) Interpretación basada en reglas
-    rule_interp = interpreter_agent(query)
-    logger.info(f"Interpretación rule_based: {rule_interp}")
-
-    # 2) Interpretación con LLM (Qwen) - ✅ SÍ USAMOS OLLAMA
-    llm_interp = nlp_agent(query)
-    logger.info(f"Interpretación LLM: {llm_interp}")
-
-    # 3) Fusión
-    interpretation = merge_interpretations(rule_interp, llm_interp)
-    logger.info(f"Interpretación combinada final: {interpretation}")
+    # ---------------------------------------------------------
+    # 1. INTERPRETACIÓN CON OLLAMA
+    # ---------------------------------------------------------
+    logger.info("🔍 Analizando consulta con NLP...")
+    interpretation = nlp_agent(query)
+    logger.info(f"✅ NLP detectó - Intención: {interpretation.get('intent')}, Título: {interpretation.get('target_title')}")
 
     intent = interpretation.get("intent", "unknown")
-
     evidence = None
     fact_result = None
 
     # ---------------------------------------------------------
-    # 4) Obtener evidencia si se requiere
+    # 2. BÚSQUEDA WEB SI ES NECESARIO
     # ---------------------------------------------------------
     if interpretation.get("needs_web") or intent in ["search", "analysis", "fact_check"]:
-        title = interpretation["entities"].get("title")
+        title = interpretation.get("target_title") or interpretation["entities"].get("title")
+        
         if not title:
+            logger.warning("❌ No se pudo determinar el título")
             return "No pude determinar el título sobre el cual consultar."
-        evidence = web_search_agent(query)  # ✅ Solo query, no title
+        
+        logger.info(f"🌐 Buscando información para: '{title}'")
+        evidence = web_search_agent(title)
+        
+        if evidence and "error" not in evidence:
+            logger.info(f"✅ Información encontrada: {evidence.get('title', 'N/A')} ({evidence.get('year', 'N/A')})")
+        else:
+            logger.warning("❌ No se encontró información en la búsqueda web")
 
     # ---------------------------------------------------------
-    # 5) Realizar fact-check
+    # 3. FACT-CHECK SI ES NECESARIO
     # ---------------------------------------------------------
     if interpretation.get("needs_fact_check") or intent == "fact_check":
+        logger.info("🔍 Realizando verificación de hechos...")
         fact_result = fact_checker_agent(query, evidence)
+        
+        if fact_result:
+            status = "VERDADERO" if fact_result.get("is_true") else "FALSO" if fact_result.get("is_true") is False else "INCONCLUSO"
+            logger.info(f"✅ Fact-check completado: {status}")
 
     # ---------------------------------------------------------
-    # 6) Generar un reporte estructurado
+    # 4. GENERAR REPORTE
     # ---------------------------------------------------------
+    logger.info("📊 Generando reporte...")
     report = reporter_agent(
-        interpretation=interpretation,  # ✅ Sin parámetro 'query'
+        interpretation=interpretation,
         evidence=evidence,
         fact_check=fact_result
     )
+    
+    logger.info(f"💾 Reporte guardado: {report.get('filename', 'N/A')}")
 
     # ---------------------------------------------------------
-    # 7) RESPUESTA FINAL AL USUARIO
+    # 5. RESPUESTA FINAL
     # ---------------------------------------------------------
+    logger.info(f"🎯 Preparando respuesta para intención: {intent}")
 
-    # ---------------------- ANALYSIS ----------------------
+    # ANALYSIS
     if intent == "analysis":
         genres = evidence.get("genres", []) if evidence else []
         summary = report.get("summary", "")
-
-        return f"""
+        
+        response = f"""
 📌 **Análisis sobre tu pregunta**
 
-🎬 *{interpretation['entities']['title']}*
+🎬 *{title}*
 
-🔎 **Propósito de tu pregunta:**  
-{interpretation.get("query_purpose")}  
+🔎 **Propósito:** {interpretation.get("query_purpose")}  
 
-🎭 **Géneros detectados:**  
-{", ".join(genres) if genres else "No disponibles"}
+🎭 **Géneros:** {", ".join(genres) if genres else "No disponibles"}
 
-📖 **Resumen clave:**  
-{summary}
+📖 **Resumen:** {summary}
+"""
+        logger.info("✅ Respuesta ANALYSIS generada")
+        return response.strip()
 
-(Generé un reporte completo, pero aquí solo te muestro lo importante.)
-""".strip()
-
-    # ---------------------- SEARCH ------------------------
+    # SEARCH
     if intent == "search":
         summary = report.get("summary", "")
-        return f"""
-**Información encontrada sobre {interpretation['entities']['title']}:**
+        
+        response = f"""
+**Información sobre {title}:**
 
 {summary}
+"""
+        logger.info("✅ Respuesta SEARCH generada")
+        return response.strip()
 
-(El reporte completo se guardó automáticamente.)
-""".strip()
+    # FACT-CHECK
+    if intent == "fact_check" and fact_result:
+        status = "VERDADERO" if fact_result["is_true"] else "FALSO" if fact_result["is_true"] is False else "INCONCLUSO"
+        
+        response = f"""
+**Fact-Check:** {fact_result['claim']}
 
-    # ---------------------- FACT-CHECK --------------------
-    if intent == "fact_check":
-        if fact_result:
-            status = (
-                "VERDADERO" if fact_result["is_true"] is True
-                else "FALSO" if fact_result["is_true"] is False
-                else "INSUFICIENTE"
-            )
+**Resultado:** {status}
 
-            explanation = fact_result.get("evidence", "Sin explicación")
+**Evidencia:** {fact_result.get('evidence', 'Sin explicación')}
+"""
+        logger.info("✅ Respuesta FACT-CHECK generada")
+        return response.strip()
 
-            return f"""
-**Resultado del fact-check**
-
-Afirmación:
-➡️ *"{fact_result['claim']}"*
-
-Estado: **{status}**
-
-**Evidencia o explicación:**  
-{explanation}
-""".strip()
-
-    # ------------------- DEFAULT FALLBACK -------------------
+    logger.warning("❌ Intención no reconocida")
     return "No entiendo la consulta. ¿Puedes reformularla?"
 
-
-# ---------------------------------------------------------
-# EJECUCIÓN CLI
-# ---------------------------------------------------------
 if __name__ == "__main__":
     import sys
     query = " ".join(sys.argv[1:])
+    if not query:
+        print("❌ Por favor proporciona una consulta")
+        sys.exit(1)
+        
     print(run_query(query))
