@@ -1,62 +1,93 @@
+# agents/nlp_agent.py
+
 import logging
+import requests
 import json
-import ollama
 
 logger = logging.getLogger("nlp_agent")
 
-MODEL = "qwen2.5:7b"  # cambia aquí el modelo si quieres otro
-
-
-def ask_llm_for_intent(query):
+def nlp_agent(query: str):
     """
-    Pregunta a Qwen local vía Ollama.
-    El modelo devuelve SOLO JSON válido con la interpretación.
+    Agent that uses Ollama with Qwen model to interpret user queries
     """
-
-    prompt = f"""
-Eres el analizador de intenciones de un sistema multi-agente.
-Tu trabajo es interpretar la consulta del usuario y devolver un JSON con:
-
-- intent: "search", "fact_check", "analysis", "opinion", "comparison", "summary", "unknown".
-- target_title: serie/película si aplica.
-- target_person: persona si aplica.
-- task: subtarea como "genre_inference", "cast_question", "violence_compare", "award_check", etc.
-- needs_web: true o false según si debe consultarse el scraper.
-- needs_fact_check: true/false.
-- query_purpose: una frase explicativa.
-
-DEVUELVE SOLO JSON PURO, SIN TEXTO EXTRA.
-
-Consulta:
-"{query}"
-"""
-
-    response = ollama.chat(
-        model=MODEL,
-        messages=[{"role": "user", "content": prompt}]
-    )
-
-    content = response["message"]["content"].strip()
-
-    logger.info(f"Qwen NLP output: {content}")
-
     try:
-        parsed = json.loads(content)
-    except json.JSONDecodeError:
-        logger.error("❌ El modelo no devolvió JSON válido")
-        parsed = {"intent": "unknown", "raw": content}
-
-    return parsed
-
-
-def nlp_agent(query):
-    """
-    Punto de entrada principal del agente NLP.
-    """
-
-    try:
-        parsed = ask_llm_for_intent(query)
-        return parsed
+        logger.info(f"🔍 NLP Agent processing: {query}")
+        
+        prompt = f"""
+        Eres un asistente especializado en analizar consultas sobre películas, series y contenido multimedia.
+        
+        ANALIZA esta consulta: "{query}"
+        
+        Tu tarea es IDENTIFICAR EL TÍTULO PRINCIPAL mencionado en la consulta, incluso si la descripción es vaga.
+        
+        Responde SOLO con un JSON válido con esta estructura:
+        {{
+            "intent": "search|analysis|fact_check|unknown",
+            "target_title": "título detectado o null",
+            "task": "descripción breve de la tarea",
+            "needs_web": true/false,
+            "needs_fact_check": true/false,
+            "query_purpose": "propósito de la consulta en una frase"
+        }}
+        
+        Reglas importantes:
+        - "search": cuando piden buscar información general
+        - "analysis": cuando piden analizar profundamente  
+        - "fact_check": cuando piden verificar una afirmación
+        - "needs_web": true si requiere búsqueda web
+        - "needs_fact_check": true solo para verificaciones
+        - "target_title": SIEMPRE intenta extraer un título, incluso si es aproximado
+        
+        Ejemplos:
+        - "hay una serie de un pájaro azul y un mapache" → "target_title": "pájaro azul mapache"
+        - "película de zombies del 2010" → "target_title": "zombies 2010"
+        - "busca información sobre The Matrix" → "target_title": "The Matrix"
+        """
+        
+        response = requests.post(
+            "http://localhost:11434/api/generate",
+            json={
+                "model": "qwen2.5:7b",
+                "prompt": prompt,
+                "stream": False
+            },
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            response_text = result.get("response", "").strip()
+            
+            # Extraer JSON de la respuesta
+            try:
+                start = response_text.find('{')
+                end = response_text.rfind('}') + 1
+                if start != -1 and end != -1:
+                    json_str = response_text[start:end]
+                    parsed = json.loads(json_str)
+                    logger.info(f"✅ NLP Agent result: {parsed}")
+                    return parsed
+            except json.JSONDecodeError as e:
+                logger.error(f"❌ Error parsing JSON from Ollama: {e}")
+                logger.error(f"Raw response: {response_text}")
+        
+        # Fallback en caso de error
+        return {
+            "intent": "unknown",
+            "target_title": None,
+            "task": "fallback",
+            "needs_web": False,
+            "needs_fact_check": False,
+            "query_purpose": "Consulta no reconocida"
+        }
+        
     except Exception as e:
         logger.error(f"❌ Error en nlp_agent: {e}")
-        return {"intent": "unknown", "error": str(e)}
+        return {
+            "intent": "unknown", 
+            "target_title": None,
+            "task": None,
+            "needs_web": False,
+            "needs_fact_check": False,
+            "query_purpose": None
+        }

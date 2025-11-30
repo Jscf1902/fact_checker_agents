@@ -33,7 +33,8 @@ def run_query(query: str):
     # 2. BÚSQUEDA WEB SI ES NECESARIO
     # ---------------------------------------------------------
     if interpretation.get("needs_web") or intent in ["search", "analysis", "fact_check"]:
-        title = interpretation.get("target_title") or interpretation["entities"].get("title")
+        # ✅ CORREGIDO: Usar solo target_title, no entities
+        title = interpretation.get("target_title")
         
         if not title:
             logger.warning("❌ No se pudo determinar el título")
