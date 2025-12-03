@@ -11,11 +11,13 @@ from agents.fact_checker import fact_checker_agent
 from agents.web_search import web_search_agent
 from agents.reporter import reporter_agent
 from agents.nlp_agent import nlp_agent
+from agents.web_search_async import web_search_agent_async
+
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s:%(name)s:%(message)s')
 logger = logging.getLogger("coordinator")
 
-def run_query(query: str):
+async def run_query(query: str):
     logger.info(f"🚀 Iniciando procesamiento para: '{query}'")
 
     # ---------------------------------------------------------
@@ -41,7 +43,7 @@ def run_query(query: str):
             return "No pude determinar el título sobre el cual consultar."
         
         logger.info(f"🌐 Buscando información para: '{title}'")
-        evidence = web_search_agent(title)
+        evidence = await web_search_agent_async(title)
         
         if evidence and "error" not in evidence:
             logger.info(f"✅ Información encontrada: {evidence.get('title', 'N/A')} ({evidence.get('year', 'N/A')})")

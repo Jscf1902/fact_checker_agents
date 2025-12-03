@@ -54,7 +54,7 @@ def nlp_agent(query: str):
                 "prompt": prompt,
                 "stream": False
             },
-            timeout=30
+            timeout=120
         )
         
         if response.status_code == 200:

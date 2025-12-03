@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Movie AI Chat</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+
+<div id="chat-container">
+
+    <!-- PANEL IZQUIERDO -->
+    <div id="info-panel">
+        <img id="logo" src="/static/logo.png" alt="Logo MovieAI">
+
+        <h2 class="brand-title">Movie AI Chat</h2>
+        <p class="brand-subtitle">Asistente inteligente para verificar datos y buscar películas</p>
+    </div>
+
+    <!-- PANEL DERECHO (CHAT) -->
+    <div id="messages-panel">
+
+        <!-- CONTENEDOR DE MENSAJES -->
+        <div id="messages"></div>
+
+        <!-- LOADER -->
+        <div id="loader" style="display: none; text-align: center; margin: 8px 0;">
+            <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+            <div style="font-size:11px; color:#3a73d9; margin-top:5px;">Procesando...</div>
+        </div>
+
+        <!-- INPUT -->
+        <div id="input-area">
+            <input id="user-input" type="text" placeholder="Escribe una pregunta...">
+            <button id="send-btn">Enviar</button>
+        </div>
+
+    </div>
+</div>
+
+<!-- SCRIPT -->
+<script src="/static/script.js"></script>
+
+</body>
+</html>
