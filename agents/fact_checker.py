@@ -7,211 +7,267 @@ logger = logging.getLogger("fact_checker_agent")
 
 def fact_checker_agent(query: str, evidence: dict = None):
     """
-    Agent que verifica afirmaciones sobre películas/series - MEJORADO
+    Fact-checker general sin casos específicos.
+    Verifica usando lógica basada en evidencia estructurada y consistencia textual.
     """
-    logger.info(f"🔍 Realizando fact-check para: '{query}'")
+    logger.info(f"🔍 Fact-check: '{query}'")
     
     try:
-        # Extraer la afirmación principal
         claim = extract_claim_from_query(query)
-        
+
         if not evidence or "error" in evidence:
-            logger.warning("❌ No hay evidencia suficiente")
             return {
                 "claim": claim,
                 "is_true": None,
-                "evidence": "No se encontró información suficiente para verificar.",
+                "evidence": "No se encontró suficiente información.",
                 "confidence": "low"
             }
-        
-        # VERIFICACIÓN MEJORADA - casos específicos
-        result = verify_claim_improved(claim, evidence, query)
-        
-        logger.info(f"✅ Fact-check completado: {result['is_true']}")
+
+        result = verify_claim_general(claim, evidence, query)
+        logger.info(f"✔️ Resultado fact-check: {result['is_true']}")
         return result
-        
+
     except Exception as e:
         logger.error(f"❌ Error en fact-checker: {e}")
         return {
             "claim": query,
             "is_true": None,
-            "evidence": f"Error al verificar: {str(e)}",
+            "evidence": f"Error interno: {str(e)}",
             "confidence": "low"
         }
 
+
+# -------------------------------------------------------------
+# 1) Limpieza de la afirmación
+# -------------------------------------------------------------
 def extract_claim_from_query(query: str) -> str:
-    """Extrae la afirmación principal"""
     patterns_to_remove = [
-        r'es cierto que',
-        r'verifica si', 
-        r'¿es verdad que',
-        r'confirmar si',
-        r'fact check de',
-        r'\?$'  # remover signo de pregunta final
+        r'es cierto que', r'verifica si', r'¿es verdad que',
+        r'confirmar si', r'fact check de', r'podrías verificar',
+        r'comprueba si', r'\?$'
     ]
-    
+
     claim = query
-    for pattern in patterns_to_remove:
-        claim = re.sub(pattern, '', claim, flags=re.IGNORECASE)
-    
+    for p in patterns_to_remove:
+        claim = re.sub(p, "", claim, flags=re.IGNORECASE)
+
     return claim.strip()
 
-def verify_claim_improved(claim: str, evidence: dict, original_query: str) -> dict:
-    """
-    Verificación MEJORADA con más casos específicos
-    """
-    claim_lower = original_query.lower()
-    evidence_title = evidence.get("title", "").lower()
-    
-    logger.info(f"🔎 Verificando: '{claim}' contra '{evidence_title}'")
-    
-    # CASO 1: Leonardo DiCaprio + Avatar
-    if "leonardo dicaprio" in claim_lower and "avatar" in claim_lower:
+
+# -------------------------------------------------------------
+# 2) Verificación general sin casuísticas duras
+# -------------------------------------------------------------
+def verify_claim_general(claim: str, evidence: dict, original_query: str) -> dict:
+    claim_lower = claim.lower()
+    ev_title = evidence.get("title", "").lower()
+
+    # ---------------------------------------------------------
+    # A) Verificación de coherencia obra–consulta
+    # ---------------------------------------------------------
+    if ev_title and ev_title not in claim_lower:
+        # Si la obra no coincide con lo consultado, se devuelve "incierto"
+        # NO se asume falso porque puede ser un falso positivo del scraper.
         return {
             "claim": claim,
-            "is_true": False,
-            "evidence": "❌ FALSO: Leonardo DiCaprio NO ganó Oscar por Avatar. De hecho, ni siquiera actuó en Avatar. El protagonista fue Sam Worthington.",
-            "confidence": "high"
+            "is_true": None,
+            "evidence": (
+                "La consulta parece referirse a una obra distinta "
+                f"de la encontrada ('{evidence.get('title')}')."
+            ),
+            "confidence": "low"
         }
-    
-    # CASO 2: Leonardo DiCaprio + El Renacido (The Revenant)
-    if "leonardo dicaprio" in claim_lower and any(word in claim_lower for word in ["renacido", "revenant"]):
-        return {
-            "claim": claim, 
-            "is_true": True,
-            "evidence": "✅ VERDADERO: Leonardo DiCaprio SÍ ganó el Oscar al Mejor Actor en 2016 por 'El Renacido' (The Revenant).",
-            "confidence": "high"
-        }
-    
-    # CASO 3: Director de una película
-    if any(word in claim_lower for word in ["director", "dirigió", "dirigio"]):
-        return verify_director_claim(claim, evidence, original_query)
-    
-    # CASO 4: Año de estreno  
+
+    # ---------------------------------------------------------
+    # B) Verificación de DIRECTOR basado en evidencia estructurada
+    # ---------------------------------------------------------
+    if any(k in claim_lower for k in ["director", "dirigió", "dirigido"]):
+        return compare_simple_entity(
+            claim,
+            entity_from_claim=extract_name_from_text(claim_lower),
+            entity_from_evidence=evidence.get("director", ""),
+            entity_label="director"
+        )
+
+    # ---------------------------------------------------------
+    # C) Verificación de actor / cast
+    # ---------------------------------------------------------
+    if any(k in claim_lower for k in ["actúa", "actuo", "actor", "protagon", "reparto"]):
+        return verify_actor_relation(claim, evidence)
+
+    # ---------------------------------------------------------
+    # D) Verificación de AÑO
+    # ---------------------------------------------------------
     year_match = re.search(r'\b(19\d{2}|20\d{2})\b', claim_lower)
-    if year_match:
-        return verify_year_claim(claim, evidence, original_query, year_match.group(1))
-    
-    # CASO 5: Premios Oscars genéricos
-    if any(word in claim_lower for word in ["oscar", "premio", "ganó", "gano"]):
-        return verify_oscar_claim(claim, evidence, original_query)
-    
-    # CASO GENÉRICO
-    return generic_verification(claim, evidence, original_query)
+    if year_match and evidence.get("year"):
+        return compare_years(claim, year_match.group(1), evidence.get("year"))
 
-def verify_director_claim(claim: str, evidence: dict, original_query: str) -> dict:
-    """Verifica afirmaciones sobre directores"""
-    evidence_director = evidence.get("director", "").lower()
-    
-    # Buscar directores famosos en la consulta
-    famous_directors = {
-        "christopher nolan": ["nolan"],
-        "james cameron": ["cameron"], 
-        "steven spielberg": ["spielberg"],
-        "quentin tarantino": ["tarantino"],
-        "peter jackson": ["jackson"],
-        "martin scorsese": ["scorsese"]
-    }
-    
-    for director, keywords in famous_directors.items():
-        if any(keyword in original_query.lower() for keyword in keywords):
-            if director in evidence_director:
-                return {
-                    "claim": claim,
-                    "is_true": True,
-                    "evidence": f"✅ VERDADERO: {director.title()} sí fue el director de '{evidence.get('title', 'la película')}'.",
-                    "confidence": "high"
-                }
-            else:
-                actual_director = evidence.get('director', 'Desconocido')
-                return {
-                    "claim": claim,
-                    "is_true": False, 
-                    "evidence": f"❌ FALSO: {director.title()} NO fue el director. El director real fue: {actual_director}.",
-                    "confidence": "high"
-                }
-    
-    return generic_verification(claim, evidence, original_query)
+    # ---------------------------------------------------------
+    # E) Verificación de premios (muy general)
+    # ---------------------------------------------------------
+    if any(k in claim_lower for k in ["oscar", "premio", "award", "ganó", "gano"]):
+        return verify_awards_generic(claim, evidence)
 
-def verify_oscar_claim(claim: str, evidence: dict, original_query: str) -> dict:
-    """Verifica afirmaciones sobre premios Oscars"""
-    evidence_title = evidence.get("title", "").lower()
-    
-    # Base de datos simple de ganadores de Oscars
-    oscar_winners = {
-        "avatar": "Avatar ganó 3 Oscares (Mejor Fotografía, Mejor Dirección de Arte, Mejores Efectos Visuales) pero NO ganó Mejor Película.",
-        "titanic": "Titanic ganó 11 Oscares incluyendo Mejor Película (1997).",
-        "the lord of the rings: the return of the king": "El Señor de los Anillos: el retorno del Rey ganó 11 Oscares incluyendo Mejor Película (2003).",
-        "the revenant": "El Renacido ganó 3 Oscares incluyendo Mejor Actor para Leonardo DiCaprio (2016).",
-        "forrest gump": "Forrest Gump ganó 6 Oscares incluyendo Mejor Película (1994)."
+    # ---------------------------------------------------------
+    # F) Verificación por coincidencia textual general
+    # ---------------------------------------------------------
+    return generic_similarity_verification(claim, evidence)
+
+
+# -------------------------------------------------------------
+# 3) Utilidades generales
+# -------------------------------------------------------------
+def extract_name_from_text(text: str) -> str:
+    """
+    Extrae potencial nombre propio de la afirmación.
+    Esto es útil para director/actor sin casos predefinidos.
+    """
+    tokens = text.split()
+    candidates = [w for w in tokens if w.istitle()]
+    return " ".join(candidates) if candidates else ""
+
+
+def compare_simple_entity(claim, entity_from_claim, entity_from_evidence, entity_label):
+    """
+    Comparación genérica para director, creador, escritor, etc.
+    """
+    if not entity_from_evidence:
+        return {
+            "claim": claim,
+            "is_true": None,
+            "evidence": f"No hay información del {entity_label}.",
+            "confidence": "low"
+        }
+
+    if entity_from_claim.lower() in entity_from_evidence.lower():
+        return {
+            "claim": claim,
+            "is_true": True,
+            "evidence": f"El {entity_label} coincide: {entity_from_evidence}.",
+            "confidence": "high"
+        }
+
+    return {
+        "claim": claim,
+        "is_true": False,
+        "evidence": (
+            f"El {entity_label} mencionado no coincide. "
+            f"El {entity_label} real es: {entity_from_evidence}."
+        ),
+        "confidence": "high"
     }
-    
-    for movie, oscar_info in oscar_winners.items():
-        if movie in evidence_title:
-            return {
-                "claim": claim,
-                "is_true": True if "ganó" in claim.lower() else None,
-                "evidence": f"ℹ️ INFORMACIÓN: {oscar_info}",
-                "confidence": "high"
-            }
-    
+
+
+def verify_actor_relation(claim, evidence):
+    """
+    Verificación general para saber si un actor pertenece al cast.
+    """
+    cast_list = evidence.get("cast", [])
+    cast_text = " ".join(cast_list).lower()
+    claim_lower = claim.lower()
+
+    extracted = extract_name_from_text(claim)
+    if not extracted:
+        return generic_similarity_verification(claim, evidence)
+
+    if extracted.lower() in cast_text:
+        return {
+            "claim": claim,
+            "is_true": True,
+            "evidence": f"El actor '{extracted}' sí aparece en el reparto.",
+            "confidence": "high"
+        }
+
+    return {
+        "claim": claim,
+        "is_true": False,
+        "evidence": f"El actor '{extracted}' NO aparece en el reparto proporcionado.",
+        "confidence": "high"
+    }
+
+
+def compare_years(claim, claim_year, real_year):
+    if claim_year == str(real_year):
+        return {
+            "claim": claim,
+            "is_true": True,
+            "evidence": f"Año correcto: {real_year}.",
+            "confidence": "high"
+        }
+    return {
+        "claim": claim,
+        "is_true": False,
+        "evidence": f"Año incorrecto. El año real es {real_year}.",
+        "confidence": "high"
+    }
+
+
+def verify_awards_generic(claim, evidence):
+    """
+    Lógica muy general basada en coincidencia entre:
+    - claim
+    - lista de premios detectados en evidence
+    """
+    ev_awards = evidence.get("awards", "").lower()
+
+    if not ev_awards:
+        return {
+            "claim": claim,
+            "is_true": None,
+            "evidence": "No se encontró información de premios.",
+            "confidence": "low"
+        }
+
+    # Si menciona un premio que aparece en evidencia → posible verdadero
+    important_words = [w for w in claim.lower().split() if len(w) > 4]
+
+    matches = sum(1 for w in important_words if w in ev_awards)
+    ratio = matches / len(important_words) if important_words else 0
+
+    if ratio >= 0.5:
+        return {
+            "claim": claim,
+            "is_true": True,
+            "evidence": "La descripción coincide con la información de premios.",
+            "confidence": "medium"
+        }
+
     return {
         "claim": claim,
         "is_true": None,
-        "evidence": "No se pudo verificar información específica sobre premios Oscars para esta película.",
-        "confidence": "medium"
+        "evidence": "No se pudo verificar la información de premios.",
+        "confidence": "low"
     }
 
-def verify_year_claim(claim: str, evidence: dict, original_query: str, claim_year: str) -> dict:
-    """Verifica afirmaciones sobre años"""
-    evidence_year = evidence.get("year", "")
-    
-    if evidence_year and claim_year == evidence_year:
-        return {
-            "claim": claim,
-            "is_true": True,
-            "evidence": f"✅ VERDADERO: El año de estreno es efectivamente {evidence_year}.",
-            "confidence": "high"
-        }
-    elif evidence_year:
-        return {
-            "claim": claim, 
-            "is_true": False,
-            "evidence": f"❌ FALSO: El año de estreno no es {claim_year}. Es {evidence_year}.",
-            "confidence": "high"
-        }
-    
-    return generic_verification(claim, evidence, original_query)
 
-def generic_verification(claim: str, evidence: dict, original_query: str) -> dict:
-    """Verificación genérica por coincidencia de texto"""
+def generic_similarity_verification(claim, evidence):
+    """
+    Lógica general sin asumir casos específicos.
+    """
     evidence_text = str(evidence).lower()
     claim_lower = claim.lower()
-    
-    # Buscar palabras clave importantes
-    important_words = [word for word in claim_lower.split() if len(word) > 3]
-    if important_words:
-        matches = sum(1 for word in important_words if word in evidence_text)
-        match_ratio = matches / len(important_words)
-        
-        if match_ratio >= 0.7:
-            return {
-                "claim": claim,
-                "is_true": True,
-                "evidence": "La información encontrada respalda la afirmación.",
-                "confidence": "medium"
-            }
-        elif match_ratio <= 0.3:
-            return {
-                "claim": claim,
-                "is_true": False,
-                "evidence": "La información encontrada contradice la afirmación.",
-                "confidence": "medium"
-            }
-    
+
+    words = [w for w in claim_lower.split() if len(w) > 4]
+    matches = sum(1 for w in words if w in evidence_text)
+    ratio = matches / len(words) if words else 0
+
+    if ratio >= 0.7:
+        return {
+            "claim": claim,
+            "is_true": True,
+            "evidence": "La afirmación coincide con la información encontrada.",
+            "confidence": "medium"
+        }
+    elif ratio <= 0.25:
+        return {
+            "claim": claim,
+            "is_true": False,
+            "evidence": "La afirmación no coincide con la información disponible.",
+            "confidence": "medium"
+        }
+
     return {
         "claim": claim,
         "is_true": None,
-        "evidence": "No se pudo determinar la veracidad con la información disponible.",
+        "evidence": "No es posible determinar la veracidad con la información disponible.",
         "confidence": "low"
     }

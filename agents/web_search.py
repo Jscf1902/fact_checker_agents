@@ -46,6 +46,13 @@ def web_search_agent(title: str):
                 "cast": result.get("cast", [])
             }
             logger.info(f"✅ Información formateada: {formatted_result['title']} ({formatted_result['year']})")
+            if result.get("title") and title.lower() not in result["title"].lower():
+                logger.warning("⚠ Posible título incorrecto, intentando validar con coincidencia parcial...")
+                if title.split()[0].lower() in result["title"].lower():
+                    logger.info("✔ Aprobado por coincidencia parcial")
+                else:
+                    logger.warning("❌ Título probablemente incorrecto")
+                                
             return formatted_result
         else:
             logger.warning(f"❌ Error en scraping: {result.get('error')}")
@@ -70,6 +77,30 @@ def web_search_agent(title: str):
             "rating": "No disponible",
             "cast": []
         }
+
+def compute_relevance(found_title, query):
+    ft = found_title.lower()
+    q = query.lower()
+
+    # Exacta → máxima prioridad
+    if ft == q:
+        return 200  
+
+    # Coincidencia fuerte
+    if q in ft:
+        return 150  
+
+    # Coincidencia parcial por palabras
+    shared = sum(1 for word in q.split() if word in ft)
+    if shared > 0:
+        return 100 + shared * 10
+
+    # Fuzzy muy simple (primeras 4 letras)
+    if ft[:4] == q[:4]:
+        return 80
+
+    return 30
+
 
 def search_tmdb_online(search_terms):
     """Busca en TMDB y devuelve el primer resultado RELEVANTE"""
@@ -110,10 +141,10 @@ def search_tmdb_online(search_terms):
                 for match in matches:
                     tmdb_id, found_title = match
                     media_type = "movie" if "/movie/" in pattern else "tv"
-                    
+                  
                     # Calcular relevancia simple
-                    relevance = 100 if found_title.lower() == search_terms.lower() else 50
-                    
+                    relevance = compute_relevance(found_title, search_terms)
+                                        
                     results.append({
                         "tmdb_id": int(tmdb_id),
                         "type": media_type,

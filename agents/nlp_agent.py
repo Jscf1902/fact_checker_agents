@@ -3,6 +3,7 @@
 import logging
 import requests
 import json
+import re
 
 logger = logging.getLogger("nlp_agent")
 
@@ -54,7 +55,7 @@ def nlp_agent(query: str):
                 "prompt": prompt,
                 "stream": False
             },
-            timeout=120
+            timeout=180
         )
         
         if response.status_code == 200:
@@ -63,16 +64,81 @@ def nlp_agent(query: str):
             
             # Extraer JSON de la respuesta
             try:
-                start = response_text.find('{')
-                end = response_text.rfind('}') + 1
-                if start != -1 and end != -1:
-                    json_str = response_text[start:end]
-                    parsed = json.loads(json_str)
-                    logger.info(f"✅ NLP Agent result: {parsed}")
-                    return parsed
+                # ----------------------------------------------
+                # 1) EXTRAER JSON DE LA RESPUESTA DE OLLAMA
+                # ----------------------------------------------
+                json_candidates = re.findall(r'\{.*?\}', response_text, re.DOTALL)
+
+                if not json_candidates:
+                    logger.error(f"❌ No JSON found in response: {response_text}")
+                    return {
+                        "intent": "unknown",
+                        "target_title": None,
+                        "task": "fallback",
+                        "needs_web": False,
+                        "needs_fact_check": False,
+                        "query_purpose": "No se detectó JSON en la respuesta"
+                    }
+
+                # Elegir el JSON más grande (= más probable de estar completo)
+                json_str = max(json_candidates, key=len)
+                parsed = json.loads(json_str)
+
+                logger.info(f"✅ NLP Agent result: {parsed}")
+
+                # ----------------------------------------------
+                # 2) POST-PROCESAMIENTO Y NORMALIZACIÓN DEL TÍTULO
+                # ----------------------------------------------
+                title = parsed.get("target_title")
+
+                # Limpieza básica
+                if isinstance(title, str):
+                    title = title.strip().replace('"', '').replace("'", "")
+                    parsed["target_title"] = title
+
+                # ----------------------------------------------
+                # 3) Preguntas sobre DIRECTORES → intención "search"
+                # ----------------------------------------------
+                if any(k in query.lower() for k in ["director", "dirigió", "dirigida", "directed"]):
+                    parsed["intent"] = "search"
+                    parsed["task"] = "get_director"
+                    parsed["needs_web"] = True
+
+                return parsed
+
             except json.JSONDecodeError as e:
                 logger.error(f"❌ Error parsing JSON from Ollama: {e}")
                 logger.error(f"Raw response: {response_text}")
+                return {
+                    "intent": "unknown",
+                    "target_title": None,
+                    "task": None,
+                    "needs_web": False,
+                    "needs_fact_check": False,
+                    "query_purpose": None
+                }
+
+
+        q = query.lower()
+        if parsed.get("intent") == "unknown":
+            if any(w in q for w in ["quién actúa", "actores", "reparto", "cast", "protagonistas"]):
+                parsed["intent"] = "search"
+                parsed["task"] = "get_cast"
+                parsed["needs_web"] = True
+
+            elif any(w in q for w in ["es verdad", "cierto que", "fact", "verdadero o falso", "ganó", "murió"]):
+                parsed["intent"] = "fact_check"
+                parsed["needs_fact_check"] = True
+
+            elif any(w in q for w in ["qué es", "de qué trata", "sinopsis", "trama"]):
+                parsed["intent"] = "search"
+                parsed["task"] = "get_summary"
+                parsed["needs_web"] = True
+
+            elif any(w in q for w in ["información", "datos", "detalles", "info"]):
+                parsed["intent"] = "search"
+                parsed["needs_web"] = True
+
         
         # Fallback en caso de error
         return {

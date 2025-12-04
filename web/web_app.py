@@ -62,32 +62,24 @@ def serve_chat():
 # --------------------------------------------------------------
 
 @app.post("/api/chat")
-async def chat_api(req: ChatRequest):
-    """
-    Recibe JSON: { "query": "texto del usuario" }
-    """
+async def chat_api(request: Request):
     try:
-        user_query = req.query.strip()
+        data = await request.json()
+
+        # Aceptar message o query
+        user_query = data.get("message") or data.get("query")
+
+        if not user_query:
+            return JSONResponse({"error": "Mensaje vacío"}, status_code=400)
 
         print(f"🧠 Recibido del usuario: {user_query}")
 
-        if not user_query:
-            return JSONResponse({"error": "Consulta vacía"}, status_code=400)
-
-        # Ejecutar pipeline completo
         response = await run_query(user_query)
 
         return JSONResponse({"response": response})
 
     except Exception as e:
         print(f"❌ Error interno en /api/chat: {e}")
-        return JSONResponse({"error": "Error interno del servidor"}, status_code=500)
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
-# --------------------------------------------------------------
-# EJECUCIÓN MANUAL
-# --------------------------------------------------------------
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("web.web_app:app", host="127.0.0.1", port=8000, reload=True)
