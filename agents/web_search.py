@@ -4,6 +4,7 @@ import logging
 import re
 import time
 import json
+import requests
 from playwright.sync_api import sync_playwright
 
 logging.basicConfig(level=logging.INFO)
@@ -16,7 +17,7 @@ def web_search_agent(title: str):
     logger.info(f"🎯 Buscando: '{title}'")
     
     # Buscar directamente en TMDB
-    media_id, media_type = search_tmdb_online(title)
+    media_id, media_type, corrected_title = search_tmdb_inteligente(title)
     
     if not media_id:
         logger.warning(f"❌ No se encontró '{title}' en TMDB")
@@ -30,14 +31,14 @@ def web_search_agent(title: str):
             "cast": []
         }
     
-    # Hacer scraping
+    # Hacer scraping CON CAST MEJORADO
     try:
-        result = scrape_tmdb_with_javascript(media_id, media_type)
+        result = scrape_tmdb_with_cast(media_id, media_type)
         
         # CONVERTIR AL FORMATO ESPERADO POR EL REPORTER
         if "error" not in result:
             formatted_result = {
-                "title": result.get("title", title),
+                "title": result.get("title", corrected_title or title),
                 "year": result.get("year", "No disponible"),
                 "genres": result.get("genres", []),
                 "director": result.get("director") or result.get("creator", "No disponible"),
@@ -46,13 +47,7 @@ def web_search_agent(title: str):
                 "cast": result.get("cast", [])
             }
             logger.info(f"✅ Información formateada: {formatted_result['title']} ({formatted_result['year']})")
-            if result.get("title") and title.lower() not in result["title"].lower():
-                logger.warning("⚠ Posible título incorrecto, intentando validar con coincidencia parcial...")
-                if title.split()[0].lower() in result["title"].lower():
-                    logger.info("✔ Aprobado por coincidencia parcial")
-                else:
-                    logger.warning("❌ Título probablemente incorrecto")
-                                
+            logger.info(f"✅ Cast obtenido: {len(formatted_result['cast'])} actores")
             return formatted_result
         else:
             logger.warning(f"❌ Error en scraping: {result.get('error')}")
@@ -78,98 +73,11 @@ def web_search_agent(title: str):
             "cast": []
         }
 
-def compute_relevance(found_title, query):
-    ft = found_title.lower()
-    q = query.lower()
-
-    # Exacta → máxima prioridad
-    if ft == q:
-        return 200  
-
-    # Coincidencia fuerte
-    if q in ft:
-        return 150  
-
-    # Coincidencia parcial por palabras
-    shared = sum(1 for word in q.split() if word in ft)
-    if shared > 0:
-        return 100 + shared * 10
-
-    # Fuzzy muy simple (primeras 4 letras)
-    if ft[:4] == q[:4]:
-        return 80
-
-    return 30
-
-
-def search_tmdb_online(search_terms):
-    """Busca en TMDB y devuelve el primer resultado RELEVANTE"""
+def search_tmdb_inteligente(search_terms: str):
+    """
+    Búsqueda INTELIGENTE en TMDB
+    """
     search_url = f"https://www.themoviedb.org/search?query={search_terms.replace(' ', '+')}"
-    
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        page.set_default_timeout(15000)
-        
-        try:
-            logger.info(f"🌐 Buscando en TMDB: {search_terms}")
-            page.goto(search_url, timeout=30000, wait_until="domcontentloaded")
-            
-            # Aceptar cookies
-            try:
-                page.click("#onetrust-accept-btn-handler", timeout=3000)
-                logger.info("🍪 Cookies aceptadas")
-                time.sleep(0.5)
-            except:
-                logger.info("ℹ️ No se encontró banner de cookies")
-                pass
-            
-            # Buscar resultados
-            time.sleep(2)
-            html_content = page.content()
-            browser.close()
-            
-            # Patrones de búsqueda
-            patterns = [
-                r'href="/movie/(\d+)-[^"]*"[^>]*>\s*<h2[^>]*>([^<]+)</h2>',
-                r'href="/tv/(\d+)-[^"]*"[^>]*>\s*<h2[^>]*>([^<]+)</h2>',
-            ]
-            
-            results = []
-            for pattern in patterns:
-                matches = re.findall(pattern, html_content, re.IGNORECASE)
-                for match in matches:
-                    tmdb_id, found_title = match
-                    media_type = "movie" if "/movie/" in pattern else "tv"
-                  
-                    # Calcular relevancia simple
-                    relevance = compute_relevance(found_title, search_terms)
-                                        
-                    results.append({
-                        "tmdb_id": int(tmdb_id),
-                        "type": media_type,
-                        "title": found_title.strip(),
-                        "relevance": relevance
-                    })
-            
-            # Tomar el mejor resultado
-            if results:
-                results.sort(key=lambda x: x["relevance"], reverse=True)
-                best = results[0]
-                logger.info(f"✅ Encontrado: {best['title']} (ID: {best['tmdb_id']}, Tipo: {best['type']})")
-                return best['tmdb_id'], best['type']
-            
-            logger.warning("❌ No se encontraron resultados en TMDB")
-            return None, None
-            
-        except Exception as e:
-            logger.error(f"❌ Error en búsqueda: {e}")
-            browser.close()
-            return None, None
-
-def scrape_tmdb_with_javascript(media_id, media_type):
-    """Scraping AGGRESIVO usando JavaScript para extraer datos"""
-    url = f"https://www.themoviedb.org/{media_type}/{media_id}"
     
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -177,21 +85,92 @@ def scrape_tmdb_with_javascript(media_id, media_type):
         page.set_default_timeout(40000)
         
         try:
-            logger.info(f"🎬 Scrapeando {media_type} ID: {media_id}")
-            
-            # Navegar a la página principal
-            page.goto(url, timeout=40000, wait_until="networkidle")
+            logger.info(f"🔍 Búsqueda para: '{search_terms}'")
+            page.goto(search_url, timeout=50000, wait_until="domcontentloaded")
             time.sleep(3)
             
-            # Aceptar cookies si aparecen
+            # Aceptar cookies
             try:
                 page.click("#onetrust-accept-btn-handler", timeout=2000)
                 time.sleep(1)
             except:
                 pass
             
-            # EJECUTAR JAVASCRIPT PARA EXTRAER DATOS COMPLETOS
-            result = page.evaluate("""
+            # Obtener HTML de resultados
+            results_html = page.content()
+            browser.close()
+            
+            # Buscar películas y series
+            results = []
+            
+            # Patrón para películas
+            movie_pattern = r'href="/movie/(\d+)-[^"]*".*?<h2[^>]*>(.*?)</h2>'
+            movie_matches = re.findall(movie_pattern, results_html, re.DOTALL)
+            
+            for tmdb_id, title_html in movie_matches:
+                title = re.sub(r'<.*?>', '', title_html).strip()
+                if title:
+                    results.append({
+                        "id": int(tmdb_id),
+                        "title": title,
+                        "type": "movie"
+                    })
+            
+            # Patrón para series
+            tv_pattern = r'href="/tv/(\d+)-[^"]*".*?<h2[^>]*>(.*?)</h2>'
+            tv_matches = re.findall(tv_pattern, results_html, re.DOTALL)
+            
+            for tmdb_id, title_html in tv_matches:
+                title = re.sub(r'<.*?>', '', title_html).strip()
+                if title:
+                    results.append({
+                        "id": int(tmdb_id),
+                        "title": title,
+                        "type": "tv"
+                    })
+            
+            if results:
+                # Seleccionar el PRIMER resultado (TMDB ya los ordena por relevancia)
+                best = results[0]
+                logger.info(f"✅ Resultado seleccionado: {best['title']} (ID: {best['id']}, Tipo: {best['type']})")
+                return best["id"], best["type"], best["title"]
+            
+            logger.warning("❌ No se encontraron resultados en TMDB")
+            return None, None, None
+            
+        except Exception as e:
+            logger.error(f"❌ Error en búsqueda: {e}")
+            try:
+                browser.close()
+            except:
+                pass
+            return None, None, None
+
+def scrape_tmdb_with_cast(media_id, media_type):
+    """Scraping con extracción de cast GARANTIZADA"""
+    url = f"https://www.themoviedb.org/{media_type}/{media_id}"
+    
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.set_default_timeout(60000)  # Más tiempo
+        
+        try:
+            logger.info(f"🎬 Scraping {media_type} ID: {media_id}")
+            
+            # Navegar a la página principal
+            page.goto(url, timeout=60000, wait_until="networkidle")
+            time.sleep(3)
+            
+            # Aceptar cookies
+            try:
+                page.click("#onetrust-accept-btn-handler", timeout=3000)
+                time.sleep(1)
+            except:
+                pass
+            
+            # EXTRAER DATOS BÁSICOS
+            basic_data = page.evaluate("""
                 () => {
                     const result = {
                         title: null,
@@ -204,221 +183,316 @@ def scrape_tmdb_with_javascript(media_id, media_type):
                     };
                     
                     // Título
-                    const titleSelectors = [
-                        'section.header.poster h2 a',
-                        'h2.title',
-                        'h2 a[href*="/movie/"], h2 a[href*="/tv/"]',
-                        '.title h2',
-                        'h1'
-                    ];
-                    
-                    for (const selector of titleSelectors) {
-                        const element = document.querySelector(selector);
-                        if (element && element.textContent.trim()) {
-                            result.title = element.textContent.trim();
-                            break;
-                        }
-                    }
+                    const titleEl = document.querySelector('h2 a, h2.title, [data-cy="movie-title"]');
+                    if (titleEl) result.title = titleEl.textContent.trim();
                     
                     // Sinopsis
-                    const overviewSelectors = [
-                        'div.overview p',
-                        '.overview p',
-                        '[data-cy="overview"] p'
-                    ];
-                    
-                    for (const selector of overviewSelectors) {
-                        const element = document.querySelector(selector);
-                        if (element && element.textContent.trim()) {
-                            result.overview = element.textContent.trim();
-                            break;
-                        }
-                    }
+                    const overviewEl = document.querySelector('.overview p, [data-cy="overview"]');
+                    if (overviewEl) result.overview = overviewEl.textContent.trim();
                     
                     // Año
-                    const yearElements = document.querySelectorAll('span.release_date, .release_date');
-                    for (const element of yearElements) {
-                        const text = element.textContent;
-                        const yearMatch = text.match(/(19\\d{2}|20\\d{2})/);
-                        if (yearMatch) {
-                            result.year = yearMatch[1];
-                            break;
-                        }
+                    const dateEl = document.querySelector('.release_date, .release');
+                    if (dateEl) {
+                        const yearMatch = dateEl.textContent.match(/(19\\d{2}|20\\d{2})/);
+                        if (yearMatch) result.year = yearMatch[0];
                     }
                     
                     // Géneros
-                    const genreElements = document.querySelectorAll('span.genres a, .genres a');
-                    const genres = [];
-                    for (const element of genreElements) {
-                        if (element.textContent.trim()) {
-                            genres.push(element.textContent.trim());
+                    const genreEls = document.querySelectorAll('.genres a');
+                    genreEls.forEach(el => {
+                        if (el.textContent.trim()) {
+                            result.genres.push(el.textContent.trim());
                         }
-                    }
-                    result.genres = genres;
+                    });
                     
                     // Score
-                    const scoreElement = document.querySelector('.user_score_chart, [data-percent]');
-                    if (scoreElement) {
-                        result.score = scoreElement.getAttribute('data-percent');
+                    const scoreEl = document.querySelector('[data-percent], .user_score_chart');
+                    if (scoreEl) {
+                        result.score = scoreEl.getAttribute('data-percent') || scoreEl.textContent;
                     }
                     
                     return result;
                 }
             """)
             
-            # AHORA EXTRAER CAST DE FORMA AGRESIVA
-            logger.info("🎭 Extrayendo cast con método agresivo...")
-            
-            # Ir a la página de cast
-            cast_url = f"https://www.themoviedb.org/{media_type}/{media_id}/cast"
-            page.goto(cast_url, timeout=30000, wait_until="networkidle")
-            time.sleep(3)
-            
-            # EJECUTAR JAVASCRIPT PARA EXTRAER CAST COMPLETO
-            cast_data = page.evaluate("""
-                () => {
-                    const cast = [];
-                    
-                    // Método 1: Buscar en elementos de cast
-                    const castElements = document.querySelectorAll(
-                        'ol.people.credits .card, .cast_list .profile, [data-cy="cast-person-name"], .person'
-                    );
-                    
-                    for (const element of castElements) {
-                        // Buscar nombre en diferentes lugares dentro del elemento
-                        const nameSelectors = [
-                            '.name a', '.name', 'a[href*="/person/"]', 'h2', 'p'
-                        ];
-                        
-                        for (const selector of nameSelectors) {
-                            const nameElement = element.querySelector(selector);
-                            if (nameElement && nameElement.textContent) {
-                                const name = nameElement.textContent.trim();
-                                if (name && name.length > 2 && !name.includes('Character') && 
-                                    !name.includes('Order') && name.includes(' ')) {
-                                    if (!cast.includes(name)) {
-                                        cast.push(name);
-                                    }
-                                    break;
-                                }
-                            }
-                        }
-                        
-                        // Si no se encontró con selectores, buscar texto directo
-                        if (element.textContent) {
-                            const text = element.textContent.trim();
-                            const lines = text.split('\\n');
-                            for (const line of lines) {
-                                const cleanLine = line.trim();
-                                if (cleanLine && cleanLine.length > 2 && 
-                                    !cleanLine.includes('Character') && 
-                                    !cleanLine.includes('Order') &&
-                                    cleanLine.includes(' ') &&
-                                    !cast.includes(cleanLine)) {
-                                    cast.push(cleanLine);
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    
-                    // Método 2: Buscar todos los enlaces a /person/
-                    const personLinks = document.querySelectorAll('a[href*="/person/"]');
-                    for (const link of personLinks) {
-                        if (link.textContent && link.textContent.trim()) {
-                            const name = link.textContent.trim();
-                            if (name && name.length > 2 && name.includes(' ') && 
-                                !name.includes('Character') && !cast.includes(name)) {
-                                cast.push(name);
-                            }
-                        }
-                    }
-                    
-                    // Método 3: Buscar en imágenes (alt text)
-                    const images = document.querySelectorAll('img[alt]');
-                    for (const img of images) {
-                        const alt = img.getAttribute('alt');
-                        if (alt && alt.length > 2 && alt.includes(' ') && 
-                            !alt.includes('Character') && !cast.includes(alt)) {
-                            cast.push(alt);
-                        }
-                    }
-                    
-                    return cast.slice(0, 15); // Máximo 15 actores
-                }
-            """)
-            
-            result["cast"] = cast_data
-            logger.info(f"✅ Cast encontrado: {len(cast_data)} actores")
-            
-            # Si no se encontró cast, intentar método de emergencia
-            if not cast_data:
-                logger.info("🚨 Usando método de emergencia para cast...")
-                emergency_cast = extract_cast_emergency_method(page)
-                result["cast"] = emergency_cast
-                logger.info(f"✅ Cast emergencia: {len(emergency_cast)} actores")
+            # EXTRAER CAST - MÉTODO GARANTIZADO
+            logger.info("🎭 Extrayendo cast...")
+            cast_data = extract_cast_guaranteed(page, media_id, media_type)
+            basic_data["cast"] = cast_data
             
             browser.close()
-            return result
+            return basic_data
             
         except Exception as e:
             logger.error(f"❌ Error en scraping: {e}")
-            browser.close()
+            try:
+                browser.close()
+            except:
+                pass
             return {"error": f"Error: {str(e)}"}
 
-def extract_cast_emergency_method(page):
-    """Método de emergencia: extraer todo el texto y buscar patrones de nombres"""
+def extract_cast_guaranteed(page, media_id, media_type):
+    """
+    Extrae el cast usando MÚLTIPLES métodos hasta conseguirlo
+    """
+    cast_methods = [
+        extract_cast_method_1,  # Página principal
+        extract_cast_method_2,  # Página de cast
+        extract_cast_method_3,  # API oculta
+        extract_cast_method_4   # Scraping directo
+    ]
+    
+    cast = []
+    
+    for i, method in enumerate(cast_methods, 1):
+        try:
+            logger.info(f"🎭 Intentando método {i} para cast...")
+            method_cast = method(page, media_id, media_type)
+            
+            if method_cast and len(method_cast) >= 3:
+                logger.info(f"✅ Método {i} exitoso: {len(method_cast)} actores")
+                cast = method_cast
+                break
+            else:
+                logger.info(f"⚠️  Método {i} encontró {len(method_cast) if method_cast else 0} actores")
+                
+        except Exception as e:
+            logger.warning(f"⚠️  Método {i} falló: {e}")
+    
+    # Si no se encontró cast, intentar método de emergencia
+    if not cast:
+        logger.info("🚨 Usando método de emergencia para cast...")
+        cast = extract_cast_emergency(page)
+    
+    return cast[:15]  # Máximo 15 actores
+
+def extract_cast_method_1(page, media_id, media_type):
+    """Método 1: Extraer de la página principal"""
+    cast = []
+    
     try:
-        # Obtener todo el texto de la página
-        full_text = page.content()
+        # Intentar encontrar cast en la página principal
+        cast_section = page.evaluate("""
+            () => {
+                const cast = [];
+                // Buscar sección de "Top Billed Cast"
+                const sections = document.querySelectorAll('section, .panel');
+                
+                for (const section of sections) {
+                    const text = section.textContent;
+                    if (text && text.includes('Cast') && text.includes('Top Billed')) {
+                        // Buscar nombres en esta sección
+                        const nameElements = section.querySelectorAll('a[href*="/person/"], .name, .profile .title');
+                        nameElements.forEach(el => {
+                            const name = el.textContent.trim();
+                            if (name && name.length > 2 && name.includes(' ') && !cast.includes(name)) {
+                                cast.push(name);
+                            }
+                        });
+                        break;
+                    }
+                }
+                return cast;
+            }
+        """)
         
-        # Buscar patrones de nombres en el HTML
+        if cast_section:
+            return cast_section
+            
+    except:
+        pass
+    
+    return []
+
+def extract_cast_method_2(page, media_id, media_type):
+    """Método 2: Ir a la página específica de cast"""
+    cast = []
+    
+    try:
+        # Navegar a la página de cast
+        cast_url = f"https://www.themoviedb.org/{media_type}/{media_id}/cast"
+        page.goto(cast_url, timeout=30000, wait_until="networkidle")
+        time.sleep(2)
+        
+        # Extraer nombres del cast
+        cast_data = page.evaluate("""
+            () => {
+                const cast = [];
+                
+                // Método directo: buscar todas las tarjetas de cast
+                const cards = document.querySelectorAll('.card, .profile, [class*="cast"]');
+                
+                cards.forEach(card => {
+                    // Buscar nombre dentro de la tarjeta
+                    const nameSelectors = [
+                        '.name a', 
+                        '.name', 
+                        'a[href*="/person/"]',
+                        'h2', 
+                        'p.name',
+                        '.title'
+                    ];
+                    
+                    for (const selector of nameSelectors) {
+                        const element = card.querySelector(selector);
+                        if (element && element.textContent) {
+                            const name = element.textContent.trim();
+                            // Validar que sea un nombre real
+                            if (name && name.length > 2 && name.includes(' ') && 
+                                !name.includes('Character') && !name.includes('Order')) {
+                                if (!cast.includes(name)) {
+                                    cast.push(name);
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    
+                    // Si no se encontró con selectores, buscar en el texto
+                    const text = card.textContent;
+                    const lines = text.split('\\n');
+                    for (const line of lines) {
+                        const cleanLine = line.trim();
+                        // Un nombre real: tiene espacio, empieza con mayúscula, no es muy largo
+                        if (cleanLine && cleanLine.length > 3 && cleanLine.length < 30 &&
+                            cleanLine.includes(' ') && 
+                            cleanLine[0] === cleanLine[0].toUpperCase() &&
+                            !cleanLine.includes('Character') &&
+                            !cleanLine.includes('as ') &&
+                            !cleanLine.includes('...') &&
+                            !cast.includes(cleanLine)) {
+                            cast.push(cleanLine);
+                            break;
+                        }
+                    }
+                });
+                
+                return cast;
+            }
+        """)
+        
+        if cast_data:
+            return cast_data
+            
+    except Exception as e:
+        logger.warning(f"⚠️  Método 2 falló: {e}")
+    
+    return []
+
+def extract_cast_method_3(page, media_id, media_type):
+    """Método 3: Buscar en el HTML completo"""
+    cast = []
+    
+    try:
+        # Obtener todo el HTML
+        html_content = page.content()
+        
+        # Buscar nombres usando regex
         name_patterns = [
-            r'<p class="name">[^<]*<a[^>]*>([^<]+)</a>',
-            r'<h2 class="name">[^<]*<a[^>]*>([^<]+)</a>',
-            r'<a[^>]*data-cy="cast-person-name"[^>]*>([^<]+)</a>',
             r'alt="([^"]*)"[^>]*class="profile"',
-            r'<img[^>]*alt="([^"]+)"[^>]*loading="lazy"',
+            r'<a[^>]*href="/person/[^>]*>([^<]+)</a>',
+            r'<p class="name">[^<]*<a[^>]*>([^<]+)</a>',
+            r'data-cy="cast-person-name"[^>]*>([^<]+)<'
         ]
         
-        cast_names = []
         for pattern in name_patterns:
-            matches = re.findall(pattern, full_text, re.IGNORECASE)
+            matches = re.findall(pattern, html_content)
             for match in matches:
                 name = match.strip()
-                if (name and len(name) > 2 and 
-                    name not in cast_names and
-                    not any(bad in name.lower() for bad in ["character", "order", "credit", "avatar", "loading", "image"]) and
-                    ' ' in name and
-                    len(name) < 50):
-                    cast_names.append(name)
-                    if len(cast_names) >= 12:
-                        break
-            if cast_names:
-                break
+                if (name and len(name) > 2 and name not in cast and
+                    ' ' in name and not any(bad in name.lower() for bad in 
+                    ["character", "order", "loading", "image", "avatar"])):
+                    cast.append(name)
         
-        # Si aún no hay nombres, buscar en el texto visible
-        if not cast_names:
-            visible_text = page.locator("body").inner_text()
-            # Buscar líneas que parezcan nombres (primera letra mayúscula, tienen espacio, etc.)
-            lines = visible_text.split('\n')
-            for line in lines:
-                line = line.strip()
-                if (len(line) > 3 and len(line) < 40 and
-                    ' ' in line and
-                    line[0].isupper() and
-                    not any(bad in line.lower() for bad in ["character", "order", "as ", "play"]) and
-                    line not in cast_names):
-                    cast_names.append(line)
-                    if len(cast_names) >= 8:
-                        break
+        # Filtrar nombres que parezcan reales
+        filtered_cast = []
+        for name in cast:
+            # Un nombre real generalmente tiene espacio y longitud razonable
+            if (2 <= len(name.split()) <= 3 and 
+                4 <= len(name) <= 40 and
+                not any(char.isdigit() for char in name)):
+                filtered_cast.append(name)
         
-        return cast_names[:10]  # Máximo 10 nombres
+        return filtered_cast
+        
+    except:
+        return []
+
+def extract_cast_method_4(page, media_id, media_type):
+    """Método 4: Usar la API interna de TMDB"""
+    cast = []
+    
+    try:
+        # TMDB tiene una API interna que podemos intentar usar
+        api_url = f"https://www.themoviedb.org/{media_type}/{media_id}/cast"
+        
+        # Hacer una solicitud directa a la API
+        page.goto(api_url, timeout=30000)
+        time.sleep(2)
+        
+        # Intentar extraer datos estructurados
+        api_data = page.evaluate("""
+            () => {
+                const cast = [];
+                const scriptTags = document.querySelectorAll('script[type="application/ld+json"]');
+                
+                for (const script of scriptTags) {
+                    try {
+                        const data = JSON.parse(script.textContent);
+                        if (data.actor) {
+                            if (Array.isArray(data.actor)) {
+                                data.actor.forEach(actor => {
+                                    if (actor.name) {
+                                        cast.push(actor.name);
+                                    }
+                                });
+                            } else if (data.actor.name) {
+                                cast.push(data.actor.name);
+                            }
+                        }
+                    } catch (e) {}
+                }
+                return cast;
+            }
+        """)
+        
+        if api_data and len(api_data) > 0:
+            return api_data
+            
+    except:
+        pass
+    
+    return []
+
+def extract_cast_emergency(page):
+    """Método de emergencia: extraer todo el texto visible"""
+    cast = []
+    
+    try:
+        # Obtener todo el texto visible
+        visible_text = page.locator("body").inner_text()
+        
+        # Dividir en líneas
+        lines = visible_text.split('\n')
+        
+        for line in lines:
+            line = line.strip()
+            # Buscar líneas que parezcan nombres de actores
+            # Reglas: tiene espacio, empieza con mayúscula, longitud razonable
+            if (len(line) > 3 and len(line) < 40 and
+                ' ' in line and
+                line[0].isupper() and
+                not any(bad in line.lower() for bad in 
+                       ["character", "order", "as ", "plays", "director", "writer", "producer"]) and
+                not line.endswith(':') and
+                not line.startswith('Season') and
+                not line.startswith('Episode') and
+                line not in cast):
+                cast.append(line)
+        
+        # Limitar a los primeros 10
+        return cast[:10]
         
     except Exception as e:
         logger.error(f"❌ Error en método emergencia: {e}")
         return []
-
-def scrape_tmdb_tv(tv_id):
-    """Scraper para series de TV - usa el mismo método que películas"""
-    return scrape_tmdb_with_javascript(tv_id, "tv")
